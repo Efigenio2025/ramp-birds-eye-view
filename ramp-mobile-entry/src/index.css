@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* Ramp Ops Theme — Matte / Steel / Text-first */
+:root {
+  /* Surfaces */
+  --ramp-bg: 10 12 16;         /* matte black */
+  --ramp-panel: 18 22 28;      /* steel */
+  --ramp-panel2: 22 28 36;     /* slightly brighter steel */
+
+  /* Text */
+  --ramp-text: 235 242 255;
+  --ramp-muted: 150 164 190;
+
+  /* Semantics (critical) */
+  --ramp-green: 34 197 94;     /* compliant */
+  --ramp-amber: 245 158 11;    /* due soon */
+  --ramp-red: 239 68 68;       /* overdue */
+
+  /* Optional accents */
+  --ramp-blue: 59 130 246;
+}
+
+/* Tailwind v4 token bridge:
+   These create utilities like bg-ramp-bg, text-ramp-red, ring-ramp-amber/25, etc. */
+@theme {
+  --color-ramp-bg: rgb(var(--ramp-bg) / <alpha-value>);
+  --color-ramp-panel: rgb(var(--ramp-panel) / <alpha-value>);
+  --color-ramp-panel2: rgb(var(--ramp-panel2) / <alpha-value>);
+
+  --color-ramp-text: rgb(var(--ramp-text) / <alpha-value>);
+  --color-ramp-muted: rgb(var(--ramp-muted) / <alpha-value>);
+
+  --color-ramp-green: rgb(var(--ramp-green) / <alpha-value>);
+  --color-ramp-amber: rgb(var(--ramp-amber) / <alpha-value>);
+  --color-ramp-red: rgb(var(--ramp-red) / <alpha-value>);
+
+  --color-ramp-blue: rgb(var(--ramp-blue) / <alpha-value>);
+}
+
+html, body { height: 100%; }
+
+body {
+  background: rgb(var(--ramp-bg));
+  color: rgb(var(--ramp-text));
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input[type="range"] {
+  accent-color: rgb(var(--ramp-blue));
+}
