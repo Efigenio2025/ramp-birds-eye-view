@@ -2,8 +2,8 @@ import { useMemo, useState } from "react"
 import AuthGate from "./features/auth/AuthGate"
 import MobileDashboard from "./features/dashboard/MobileDashboard"
 import CabinListScreen from "./features/cabin/CabinListScreen"
+import NightAircraftScreen from "./features/night/NightAircraftScreen"
 
-// Simple placeholder screens for now
 function Placeholder({ title }) {
   return (
     <div className="min-h-screen bg-ramp-bg text-ramp-text">
@@ -18,8 +18,6 @@ function Placeholder({ title }) {
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const [station] = useState("OMA")
-
-  // Keep this shared between Dashboard + Cabin screens
   const [outsideTempF, setOutsideTempF] = useState(6)
 
   const screen = useMemo(() => {
@@ -30,6 +28,7 @@ export default function App() {
           activeTab={activeTab}
           onNav={setActiveTab}
           onOpenCabin={() => setActiveTab("cabin")}
+          onOpenNight={() => setActiveTab("night")}
           onOpenDeice={() => setActiveTab("deice")}
           onOpenNotes={() => setActiveTab("notes")}
         />
@@ -48,18 +47,14 @@ export default function App() {
       )
     }
 
+    if (activeTab === "night") {
+      return <NightAircraftScreen station={station} activeTab={activeTab} onNav={setActiveTab} />
+    }
+
     if (activeTab === "deice") return <Placeholder title="Deice Trucks" />
-    if (activeTab === "gse") return <Placeholder title="GSE" />
     if (activeTab === "notes") return <Placeholder title="Notes / Handoff" />
 
-    return (
-      <MobileDashboard
-        station={station}
-        activeTab="dashboard"
-        onNav={setActiveTab}
-        onOpenCabin={() => setActiveTab("cabin")}
-      />
-    )
+    return null
   }, [activeTab, outsideTempF, station])
 
   return <AuthGate>{screen}</AuthGate>
