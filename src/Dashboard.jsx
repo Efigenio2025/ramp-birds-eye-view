@@ -10,62 +10,13 @@ import ActivityLine from "./components/ui/ActivityLine"
 import CabinTempCard from "./components/cabin/CabinTempCard"
 import AircraftHistoryView from "./components/cabin/AircraftHistoryView"
 
-import { minutesAgo } from "./lib/time"
 import { supabase } from "./lib/supabase"
 import { DUE_SOON_MINUTES, getCabinCheckFrequencyMinutes } from "./data/rules/schedules"
 
-// --------------------------------------
-// LIVE: outside temp snapshot from Ramp Mobile Entry
-// Source of truth: latest cabin_temp_checks.outside_temp_f
-// --------------------------------------
-const [outsideTempF, setOutsideTempF] = useState(null)
-const [weatherMeta, setWeatherMeta] = useState({ checked_at: null, source: "mobile" })
-
-// Tick so "mins ago" / "due in" updates on screen
-const [now, setNow] = useState(Date.now())
-useEffect(() => {
-  const id = setInterval(() => setNow(Date.now()), 30_000)
-  return () => clearInterval(id)
-}, [])
-
-// Load outside temp from latest temp check (station-wide)
-useEffect(() => {
-  let cancelled = false
-
-  const loadOutside = async () => {
-    const q = supabase
-      .from("cabin_temp_checks")
-      .select("outside_temp_f, checked_at")
-      .not("outside_temp_f", "is", null)
-      .order("checked_at", { ascending: false })
-      .limit(1)
-
-    // If your table has station column, keep this. If not, delete it.
-    q.eq("station", station)
-
-    const { data, error } = await q
-
-    if (cancelled) return
-    if (!error) {
-      const row = data?.[0]
-      setOutsideTempF(row?.outside_temp_f ?? null)
-      setWeatherMeta({ checked_at: row?.checked_at ?? null, source: "mobile" })
-    }
-  }
-
-  loadOutside()
-  const id = setInterval(loadOutside, 60_000) // refresh every minute
-  return () => {
-    cancelled = true
-    clearInterval(id)
-  }
-}, [station])
-const freq = outsideTempF != null && outsideTempF < 10 ? 30 : 60
-const weatherDemo = {
-  outsideTempF: 6, // <10 => 30 min checks, >=10 => 60 min checks
-}
-
 export default function Dashboard() {
+  // If you have station selection later, wire it here.
+  const station = "OMA"
+
   const [isCabinModalOpen, setIsCabinModalOpen] = useState(false)
   const [selectedTail, setSelectedTail] = useState(null)
 
@@ -76,13 +27,73 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
 
-  const cabinFrequencyMinutes = getCabinCheckFrequencyMinutes(weatherDemo.outsideTempF)
+  // -----------------------------
+  // LIVE: outside temp from Mobile Entry (latest cabin_temp_checks.outside_temp_f)
+  // -----------------------------
+  const [outsideTempF, setOutsideTempF] = useState(null)
+  const [weatherMeta, setWeatherMeta] = useState({ checked_at: null, source: "mobile" })
+
+  // Tick so "mins ago" / "due in" updates on screen
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const cabinFrequencyMinutes = getCabinCheckFrequencyMinutes(outsideTempF)
 
   const closeCabinModal = () => {
     setIsCabinModalOpen(false)
     setSelectedTail(null)
     setHistoryForTail([])
   }
+
+  // --------------------------------------
+  // Load outside temp (station-wide latest snapshot)
+  // --------------------------------------
+  const loadOutsideTemp = async () => {
+    try {
+      // Try with station filter first
+      let query = supabase
+        .from("cabin_temp_checks")
+        .select("outside_temp_f, checked_at")
+        .not("outside_temp_f", "is", null)
+        .order("checked_at", { ascending: false })
+        .limit(1)
+
+      query = query.eq("station", station)
+
+      let { data, error: err } = await query
+
+      // If station column doesn't exist, retry without it
+      if (err?.message?.toLowerCase().includes("station")) {
+        const retry = await supabase
+          .from("cabin_temp_checks")
+          .select("outside_temp_f, checked_at")
+          .not("outside_temp_f", "is", null)
+          .order("checked_at", { ascending: false })
+          .limit(1)
+
+        data = retry.data
+        err = retry.error
+      }
+
+      if (err) return
+
+      const row = data?.[0]
+      setOutsideTempF(row?.outside_temp_f ?? null)
+      setWeatherMeta({ checked_at: row?.checked_at ?? null, source: "mobile" })
+    } catch {
+      // swallow so we don't white-screen
+    }
+  }
+
+  useEffect(() => {
+    loadOutsideTemp()
+    const id = setInterval(loadOutsideTemp, 60_000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [station])
 
   // --------------------------------------
   // Load aircraft list + recent checks
@@ -108,8 +119,6 @@ export default function Dashboard() {
     setTails(tailList)
 
     // 2) Recent cabin temp checks across those tails
-    // We pull a recent chunk and compute latest/history counts in JS.
-    // (Simple + reliable for small station sets.)
     if (tailList.length === 0) {
       setCabinChecks([])
       setLoading(false)
@@ -118,7 +127,7 @@ export default function Dashboard() {
 
     const { data: checksRows, error: checksErr } = await supabase
       .from("cabin_temp_checks")
-      .select("id, tail, temp_f, checked_by, checked_at, notes")
+      .select("id, tail, temp_f, checked_by, checked_at, notes, outside_temp_f")
       .in("tail", tailList)
       .order("checked_at", { ascending: false })
       .limit(300)
@@ -132,6 +141,10 @@ export default function Dashboard() {
 
     setCabinChecks(checksRows ?? [])
     setLoading(false)
+
+    // Also refresh outside temp snapshot opportunistically
+    // (helps when mobile just wrote a new check)
+    loadOutsideTemp()
   }
 
   // Initial load + refresh every 30 seconds
@@ -149,7 +162,7 @@ export default function Dashboard() {
 
       const { data, error: err } = await supabase
         .from("cabin_temp_checks")
-        .select("id, tail, temp_f, checked_by, checked_at, notes")
+        .select("id, tail, temp_f, checked_by, checked_at, notes, outside_temp_f")
         .eq("tail", selectedTail)
         .order("checked_at", { ascending: false })
         .limit(80)
@@ -160,13 +173,12 @@ export default function Dashboard() {
         return
       }
 
-      // AircraftHistoryView expects a shape similar to demo:
-      // { valueF, checkedBy, checkedAt }
       const mapped = (data ?? []).map((r) => ({
         valueF: r.temp_f,
         checkedBy: r.checked_by,
         checkedAt: r.checked_at,
         notes: r.notes ?? null,
+        outsideTempF: r.outside_temp_f ?? null,
       }))
 
       setHistoryForTail(mapped)
@@ -184,14 +196,18 @@ export default function Dashboard() {
 
     for (const row of cabinChecks) {
       counts.set(row.tail, (counts.get(row.tail) ?? 0) + 1)
-      if (!byTail.has(row.tail)) byTail.set(row.tail, row) // first seen is newest (we ordered desc)
+      if (!byTail.has(row.tail)) byTail.set(row.tail, row) // newest due to desc ordering
     }
 
     const cards = tails.map((tail) => {
       const latest = byTail.get(tail)
 
-      const minsSince = latest ? Math.floor((now - new Date(latest.checked_at).getTime()) / 60000) : null
-      const minsRemaining = latest && minsSince != null ? freq - minsSince : null
+      const minsSince = latest
+        ? Math.floor((now - new Date(latest.checked_at).getTime()) / 60000)
+        : null
+
+      const minsRemaining =
+        latest && minsSince != null ? cabinFrequencyMinutes - minsSince : null
 
       let status = "NO DATA"
       let tone = "warn"
@@ -221,7 +237,6 @@ export default function Dashboard() {
       }
     })
 
-    // Sort: overdue first, then due soon, then ok, then no data
     const rank = (t) => (t === "danger" ? 0 : t === "warn" ? 1 : t === "good" ? 2 : 3)
     cards.sort((a, b) => {
       const r = rank(a.tone) - rank(b.tone)
@@ -232,7 +247,7 @@ export default function Dashboard() {
     })
 
     return cards
-  }, [cabinChecks, tails, cabinFrequencyMinutes])
+  }, [cabinChecks, tails, now, cabinFrequencyMinutes])
 
   const overdueCount = cabinCards.filter((x) => x.tone === "danger").length
   const dueSoonCount = cabinCards.filter((x) => x.tone === "warn").length
@@ -240,8 +255,10 @@ export default function Dashboard() {
   const topCard = cabinCards[0]
   const topValue = topCard?.latestValueF ?? null
   const topTail = topCard?.tail ?? "—"
-  const topNextDue =
-    topCard?.minsRemaining != null ? Math.max(0, topCard.minsRemaining) : null
+  const topNextDue = topCard?.minsRemaining != null ? Math.max(0, topCard.minsRemaining) : null
+
+  const outsideLabel =
+    outsideTempF == null ? "—" : `${outsideTempF}°F`
 
   return (
     <div className="min-h-screen bg-ramp-bg text-ramp-text">
@@ -295,7 +312,7 @@ export default function Dashboard() {
                 meta={
                   loading
                     ? "Loading…"
-                    : `${overdueCount} overdue • ${dueSoonCount} due soon • outside ${weatherDemo.outsideTempF}°F`
+                    : `${overdueCount} overdue • ${dueSoonCount} due soon • outside ${outsideLabel}`
                 }
                 badge={
                   loading
@@ -324,8 +341,13 @@ export default function Dashboard() {
                     {topValue == null ? "—" : `${topValue}°F`}
                   </div>
                   <div className="text-xs text-ramp-muted">
-                    Outside {weatherDemo.outsideTempF}°F • Checks every {cabinFrequencyMinutes} minutes
+                    Outside {outsideLabel} • Checks every {cabinFrequencyMinutes} minutes
                   </div>
+                  {weatherMeta.checked_at ? (
+                    <div className="mt-1 text-[11px] text-ramp-muted">
+                      Last outside snapshot: {new Date(weatherMeta.checked_at).toLocaleString()}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="text-right text-xs text-ramp-muted">
                   <div>
@@ -363,9 +385,7 @@ export default function Dashboard() {
                 />
               ))}
               {cabinChecks.length === 0 ? (
-                <div className="text-sm text-ramp-muted">
-                  No cabin temp checks found yet.
-                </div>
+                <div className="text-sm text-ramp-muted">No cabin temp checks found yet.</div>
               ) : null}
             </div>
           </Panel>
@@ -378,8 +398,8 @@ export default function Dashboard() {
         title={selectedTail ? `Cabin Temp History — ${selectedTail}` : "Cabin Temperature Detail"}
         subtitle={
           selectedTail
-            ? `Outside ${weatherDemo.outsideTempF}°F • Required every ${cabinFrequencyMinutes} minutes`
-            : `Outside ${weatherDemo.outsideTempF}°F • Check every ${cabinFrequencyMinutes} minutes • ${tails.length} aircraft`
+            ? `Outside ${outsideLabel} • Required every ${cabinFrequencyMinutes} minutes`
+            : `Outside ${outsideLabel} • Check every ${cabinFrequencyMinutes} minutes • ${tails.length} aircraft`
         }
       >
         {!selectedTail ? (
@@ -405,9 +425,7 @@ export default function Dashboard() {
               <div className="font-semibold text-ramp-text">Rule</div>
               <div>• Outside temp &lt; 10°F → check every 30 minutes</div>
               <div>• Outside temp ≥ 10°F → check every 60 minutes</div>
-              <div className="mt-2">
-                “Due Soon” is defined as ≤ {DUE_SOON_MINUTES} minutes to the next required check.
-              </div>
+              <div className="mt-2">“Due Soon” is defined as ≤ {DUE_SOON_MINUTES} minutes to the next required check.</div>
               <div className="mt-2">Click an aircraft to view its full history.</div>
             </div>
           </>
