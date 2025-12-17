@@ -23,27 +23,40 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
     setError("")
     setSaving(true)
 
-    // Get signed-in user (email)
+    const cleanTail = String(tail).trim().toUpperCase()
+
+    // 1) Ensure tail exists in MASTER aircraft table (prevents FK failure)
+    // This will INSERT if missing, otherwise do nothing.
+    const { error: aircraftErr } = await supabase
+      .from("aircraft")
+      .upsert([{ tail: cleanTail, active: true }], { onConflict: "tail" })
+
+    if (aircraftErr) {
+      setError(`Aircraft add failed: ${aircraftErr.message}`)
+      setSaving(false)
+      return
+    }
+
+    // 2) Get signed-in user (email)
     const { data: auth } = await supabase.auth.getUser()
     const email = auth?.user?.email ?? "unknown"
 
+    // 3) Insert cabin temp check
     const payload = {
-      tail,
+      tail: cleanTail,
       temp_f: Number(temp),
       notes: notes?.trim() || null,
       checked_by: email,
       checked_at: new Date().toISOString(),
-      station, // only works if your table has this column (see note below)
+      station, // we'll safely retry without station if column doesn't exist
     }
 
-    // If your table does NOT have station column, remove it automatically
-    // (prevents insert failure)
-    // We attempt insert with station; if it errors about station column, retry without.
     let insertErr = null
 
     const { error: firstErr } = await supabase.from("cabin_temp_checks").insert([payload])
     insertErr = firstErr
 
+    // If your table does NOT have station column, retry without it
     if (insertErr?.message?.toLowerCase().includes("station")) {
       const retryPayload = { ...payload }
       delete retryPayload.station
@@ -57,6 +70,7 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
       return
     }
 
+    // reset + refresh
     setSaving(false)
     setTemp("")
     setNotes("")
@@ -79,7 +93,7 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
                 Record Cabin Temp
               </div>
               <div className="mt-1 text-sm text-ramp-muted">
-                {tail} • enter current cabin temperature
+                {String(tail).trim().toUpperCase()} • enter current cabin temperature
               </div>
             </div>
 
@@ -111,15 +125,13 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
                 onChange={(e) => setTemp(e.target.value)}
                 className="mt-2 w-full rounded-xl bg-ramp-panel px-4 py-3 text-lg font-extrabold text-ramp-text ring-1 ring-white/10 outline-none focus:ring-white/25"
               />
-              <div className="mt-2 text-[11px] text-ramp-muted">
-                Valid range: 1–149°F (we can tighten later)
-              </div>
+              <div className="mt-2 text-[11px] text-ramp-muted">Valid range: 1–149°F</div>
             </div>
 
             <div className="rounded-xl bg-ramp-panel2 p-4 ring-1 ring-white/10">
               <label className="block text-xs font-semibold text-ramp-muted">Notes (optional)</label>
               <input
-                placeholder="e.g., AC001234 / heat cart swapped / etc."
+                placeholder="e.g., heat cart swapped / AC001234 / etc."
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 className="mt-2 w-full rounded-xl bg-ramp-panel px-4 py-3 text-sm text-ramp-text ring-1 ring-white/10 outline-none focus:ring-white/25"
@@ -144,7 +156,8 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
           </div>
 
           <div className="border-t border-white/10 px-4 py-3 text-[11px] text-ramp-muted">
-            This writes a new row to <span className="text-ramp-text">cabin_temp_checks</span>.
+            Auto-adds tail into <span className="text-ramp-text">aircraft</span> before writing{" "}
+            <span className="text-ramp-text">cabin_temp_checks</span>.
           </div>
         </div>
       </div>
