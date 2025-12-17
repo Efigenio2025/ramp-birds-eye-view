@@ -9,6 +9,11 @@ import { localOpsDateISO } from "../../utils/date"
 
 const DUE_SOON_MINUTES = 10
 
+// OMA (Eppley) fallback coords
+const STATION_COORDS = {
+  OMA: { lat: 41.3032, lon: -95.8941, tz: "America/Chicago" },
+}
+
 function minutesAgo(iso) {
   const t = new Date(iso).getTime()
   if (!Number.isFinite(t)) return null
@@ -77,6 +82,36 @@ function BottomNav({ active, onNav }) {
   )
 }
 
+// --- Real-time weather (Open-Meteo, no API key)
+async function fetchOutsideTempF(station = "OMA") {
+  const s = STATION_COORDS[station] ?? STATION_COORDS.OMA
+
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(s.lat)}` +
+    `&longitude=${encodeURIComponent(s.lon)}` +
+    `&current=temperature_2m` +
+    `&temperature_unit=fahrenheit` +
+    `&timezone=${encodeURIComponent(s.tz)}`
+
+  const res = await fetch(url, { cache: "no-store" })
+  if (!res.ok) throw new Error(`Weather fetch failed: HTTP ${res.status}`)
+
+  const json = await res.json()
+  const temp = json?.current?.temperature_2m
+  const time = json?.current?.time
+
+  if (typeof temp !== "number" || !Number.isFinite(temp)) {
+    throw new Error("Weather fetch failed: missing temperature")
+  }
+
+  return {
+    tempF: Math.round(temp),
+    observedAtISO: time ?? new Date().toISOString(),
+    source: "open-meteo",
+  }
+}
+
 export default function CabinListScreen({
   station = "OMA",
   activeTab = "cabin",
@@ -91,13 +126,21 @@ export default function CabinListScreen({
   const [checks, setChecks] = useState([])
   const [source, setSource] = useState("")
 
+  // cabin UI
   const [selectedTail, setSelectedTail] = useState(null)
   const [recordTail, setRecordTail] = useState(null)
+
+  // weather UI
+  const [weatherStatus, setWeatherStatus] = useState("idle") // idle | live | stale | error | loading
+  const [weatherMeta, setWeatherMeta] = useState({ observedAtISO: null, source: null })
+  const [manualMode, setManualMode] = useState(false)
+  const [manualTemp, setManualTemp] = useState(
+    String(Number.isFinite(Number(outsideTempF)) ? outsideTempF : 6)
+  )
 
   const freq = frequencyMinutes(outsideTempF)
 
   const loadTailsForTonight = async () => {
-    // Primary source: nightly_aircraft for today's ops date
     const { data, error: err } = await supabase
       .from("nightly_aircraft")
       .select("tail")
@@ -112,7 +155,6 @@ export default function CabinListScreen({
   }
 
   const loadTailsFallback = async () => {
-    // Fallback source: aircraft table (active list)
     const { data, error: err } = await supabase
       .from("aircraft")
       .select("tail")
@@ -137,6 +179,28 @@ export default function CabinListScreen({
 
     if (err) throw err
     return data ?? []
+  }
+
+  const refreshWeather = async () => {
+    try {
+      setWeatherStatus("loading")
+      const w = await fetchOutsideTempF(station)
+      setOutsideTempF(w.tempF)
+      setWeatherMeta({ observedAtISO: w.observedAtISO, source: w.source })
+      setWeatherStatus("live")
+      setManualMode(false)
+    } catch (e) {
+      // If we had live before, mark it stale; otherwise show error
+      setWeatherStatus((prev) => (prev === "live" ? "stale" : "error"))
+    }
+  }
+
+  const applyManual = () => {
+    const n = Number(manualTemp)
+    if (!Number.isFinite(n)) return
+    setOutsideTempF(Math.round(n))
+    setManualMode(true)
+    setWeatherStatus("stale")
   }
 
   const load = async () => {
@@ -181,12 +245,23 @@ export default function CabinListScreen({
     setLoading(false)
   }
 
+  // Initial load + interval refresh for data
   useEffect(() => {
     load()
     const id = setInterval(load, 30 * 1000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Weather: initial fetch + refresh every 5 minutes (unless manual mode)
+  useEffect(() => {
+    refreshWeather()
+    const id = setInterval(() => {
+      if (!manualMode) refreshWeather()
+    }, 5 * 60 * 1000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [station, manualMode])
 
   const rows = useMemo(() => {
     const latestByTail = new Map()
@@ -223,6 +298,14 @@ export default function CabinListScreen({
   const headerLabel =
     loading ? "LOADING" : overdueCount > 0 ? "ATTENTION" : dueSoonCount > 0 ? "DUE SOON" : "OK"
 
+  const weatherPill = (() => {
+    if (manualMode) return { label: "MANUAL", tone: "warn" }
+    if (weatherStatus === "live") return { label: "LIVE", tone: "good" }
+    if (weatherStatus === "loading") return { label: "UPDATING", tone: "warn" }
+    if (weatherStatus === "stale") return { label: "STALE", tone: "warn" }
+    return { label: "ERROR", tone: "danger" }
+  })()
+
   return (
     <div className="min-h-screen bg-ramp-bg text-ramp-text">
       {/* Header */}
@@ -250,27 +333,72 @@ export default function CabinListScreen({
             </div>
           </div>
 
-          {/* Outside temp (manual for now) */}
+          {/* Outside temp (LIVE weather + manual fallback) */}
           <div className="mt-3 rounded-2xl bg-white/4 p-3 ring-1 ring-white/10">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-ramp-muted">
-                Outside Temp (manual for now)
-                <div className="mt-1 text-sm font-semibold text-ramp-text">
-                  {outsideTempF}°F • Rule: &lt; 10°F → 30 min • ≥ 10°F → 60 min
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="text-xs text-ramp-muted">Outside Temp</div>
+                  <StatusPill label={weatherPill.label} tone={weatherPill.tone} />
                 </div>
+
+                <div className="mt-1 text-sm font-semibold text-ramp-text">
+                  {outsideTempF ?? "—"}°F • Rule: &lt; 10°F → 30 min • ≥ 10°F → 60 min
+                </div>
+
+                <div className="mt-1 text-[11px] text-ramp-muted">
+                  {weatherMeta?.source ? `Source: ${weatherMeta.source}` : "Source: —"}
+                  {weatherMeta?.observedAtISO ? ` • observed ${formatTime(weatherMeta.observedAtISO)}` : ""}
+                </div>
+
+                {weatherStatus === "error" ? (
+                  <div className="mt-2 text-[11px] text-ramp-muted">
+                    Weather fetch failed. Use Manual Override or try Refresh Weather.
+                  </div>
+                ) : null}
               </div>
 
-              <div className="w-40">
-                <input
-                  type="range"
-                  min={-10}
-                  max={40}
-                  value={outsideTempF}
-                  onChange={(e) => setOutsideTempF(Number(e.target.value))}
-                  className="w-full"
-                />
+              <div className="shrink-0 flex flex-col items-end gap-2">
+                <button
+                  onClick={refreshWeather}
+                  className="rounded-xl bg-white/6 px-3 py-2 text-xs font-semibold ring-1 ring-white/12 hover:bg-white/8 active:scale-[0.99] transition"
+                >
+                  Refresh Weather
+                </button>
+
+                <button
+                  onClick={() => setManualMode((v) => !v)}
+                  className="rounded-xl bg-white/6 px-3 py-2 text-xs font-semibold ring-1 ring-white/12 hover:bg-white/8 active:scale-[0.99] transition"
+                >
+                  {manualMode ? "Exit Manual" : "Manual Override"}
+                </button>
               </div>
             </div>
+
+            {manualMode ? (
+              <div className="mt-3 rounded-2xl bg-ramp-panel2 p-3 ring-1 ring-white/10">
+                <div className="text-xs font-semibold text-ramp-muted">Set Outside Temp (°F)</div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    placeholder="e.g., 6"
+                    value={manualTemp}
+                    onChange={(e) => setManualTemp(e.target.value)}
+                    className="w-full rounded-xl bg-ramp-panel px-4 py-3 text-sm font-extrabold text-ramp-text ring-1 ring-white/10 outline-none focus:ring-white/25"
+                  />
+                  <button
+                    onClick={applyManual}
+                    className="rounded-xl bg-[rgb(var(--ramp-amber)/0.18)] px-3 py-2 text-xs font-extrabold text-[rgb(var(--ramp-amber))] ring-1 ring-[rgb(var(--ramp-amber)/0.35)] hover:bg-[rgb(var(--ramp-amber)/0.24)] active:scale-[0.99] transition"
+                  >
+                    Apply
+                  </button>
+                </div>
+                <div className="mt-2 text-[11px] text-ramp-muted">
+                  Manual mode is a backup. Use “Refresh Weather” to return to live feed.
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {error ? (
@@ -312,10 +440,7 @@ export default function CabinListScreen({
                 const remaining = r.minsRemaining
 
                 return (
-                  <div
-                    key={r.tail}
-                    className="rounded-2xl bg-ramp-panel2 p-4 ring-1 ring-white/10"
-                  >
+                  <div key={r.tail} className="rounded-2xl bg-ramp-panel2 p-4 ring-1 ring-white/10">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-extrabold tracking-wide">{r.tail}</div>
