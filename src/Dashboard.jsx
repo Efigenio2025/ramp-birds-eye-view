@@ -15,9 +15,52 @@ import { supabase } from "./lib/supabase"
 import { DUE_SOON_MINUTES, getCabinCheckFrequencyMinutes } from "./data/rules/schedules"
 
 // --------------------------------------
-// TEMP: manual weather input for frequency
-// (Later you can feed real weather here.)
+// LIVE: outside temp snapshot from Ramp Mobile Entry
+// Source of truth: latest cabin_temp_checks.outside_temp_f
 // --------------------------------------
+const [outsideTempF, setOutsideTempF] = useState(null)
+const [weatherMeta, setWeatherMeta] = useState({ checked_at: null, source: "mobile" })
+
+// Tick so "mins ago" / "due in" updates on screen
+const [now, setNow] = useState(Date.now())
+useEffect(() => {
+  const id = setInterval(() => setNow(Date.now()), 30_000)
+  return () => clearInterval(id)
+}, [])
+
+// Load outside temp from latest temp check (station-wide)
+useEffect(() => {
+  let cancelled = false
+
+  const loadOutside = async () => {
+    const q = supabase
+      .from("cabin_temp_checks")
+      .select("outside_temp_f, checked_at")
+      .not("outside_temp_f", "is", null)
+      .order("checked_at", { ascending: false })
+      .limit(1)
+
+    // If your table has station column, keep this. If not, delete it.
+    q.eq("station", station)
+
+    const { data, error } = await q
+
+    if (cancelled) return
+    if (!error) {
+      const row = data?.[0]
+      setOutsideTempF(row?.outside_temp_f ?? null)
+      setWeatherMeta({ checked_at: row?.checked_at ?? null, source: "mobile" })
+    }
+  }
+
+  loadOutside()
+  const id = setInterval(loadOutside, 60_000) // refresh every minute
+  return () => {
+    cancelled = true
+    clearInterval(id)
+  }
+}, [station])
+const freq = outsideTempF != null && outsideTempF < 10 ? 30 : 60
 const weatherDemo = {
   outsideTempF: 6, // <10 => 30 min checks, >=10 => 60 min checks
 }
@@ -147,8 +190,8 @@ export default function Dashboard() {
     const cards = tails.map((tail) => {
       const latest = byTail.get(tail)
 
-      const minsSince = latest ? minutesAgo(latest.checked_at) : null
-      const minsRemaining = latest ? cabinFrequencyMinutes - minsSince : null
+      const minsSince = latest ? Math.floor((now - new Date(latest.checked_at).getTime()) / 60000) : null
+      const minsRemaining = latest && minsSince != null ? freq - minsSince : null
 
       let status = "NO DATA"
       let tone = "warn"
