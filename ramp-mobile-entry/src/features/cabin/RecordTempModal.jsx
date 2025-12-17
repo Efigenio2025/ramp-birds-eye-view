@@ -2,7 +2,14 @@ import { useMemo, useState } from "react"
 import { supabase } from "../../lib/supabase"
 import StatusPill from "../../components/ui/StatusPill"
 
-export default function RecordTempModal({ open, tail, station = "OMA", onClose, onSaved }) {
+export default function RecordTempModal({
+  open,
+  tail,
+  station = "OMA",
+  outsideTempF = null,
+  onClose,
+  onSaved,
+}) {
   const [temp, setTemp] = useState("")
   const [notes, setNotes] = useState("")
   const [saving, setSaving] = useState(false)
@@ -26,7 +33,6 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
     const cleanTail = String(tail).trim().toUpperCase()
 
     // 1) Ensure tail exists in MASTER aircraft table (prevents FK failure)
-    // This will INSERT if missing, otherwise do nothing.
     const { error: aircraftErr } = await supabase
       .from("aircraft")
       .upsert([{ tail: cleanTail, active: true }], { onConflict: "tail" })
@@ -45,6 +51,7 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
     const payload = {
       tail: cleanTail,
       temp_f: Number(temp),
+      outside_temp_f: Number.isFinite(Number(outsideTempF)) ? Number(outsideTempF) : null,
       notes: notes?.trim() || null,
       checked_by: email,
       checked_at: new Date().toISOString(),
@@ -70,7 +77,6 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
       return
     }
 
-    // reset + refresh
     setSaving(false)
     setTemp("")
     setNotes("")
@@ -95,6 +101,12 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
               <div className="mt-1 text-sm text-ramp-muted">
                 {String(tail).trim().toUpperCase()} • enter current cabin temperature
               </div>
+              <div className="mt-1 text-[11px] text-ramp-muted">
+                Outside temp snapshot:{" "}
+                <span className="text-ramp-text font-semibold">
+                  {Number.isFinite(Number(outsideTempF)) ? `${outsideTempF}°F` : "—"}
+                </span>
+              </div>
             </div>
 
             <button
@@ -114,9 +126,7 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
             ) : null}
 
             <div className="rounded-xl bg-ramp-panel2 p-4 ring-1 ring-white/10">
-              <label className="block text-xs font-semibold text-ramp-muted">
-                Temperature (°F)
-              </label>
+              <label className="block text-xs font-semibold text-ramp-muted">Temperature (°F)</label>
               <input
                 inputMode="numeric"
                 pattern="[0-9]*"
@@ -156,8 +166,7 @@ export default function RecordTempModal({ open, tail, station = "OMA", onClose, 
           </div>
 
           <div className="border-t border-white/10 px-4 py-3 text-[11px] text-ramp-muted">
-            Auto-adds tail into <span className="text-ramp-text">aircraft</span> before writing{" "}
-            <span className="text-ramp-text">cabin_temp_checks</span>.
+            Writes to <span className="text-ramp-text">cabin_temp_checks</span> and stores an outside-temp snapshot.
           </div>
         </div>
       </div>

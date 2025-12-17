@@ -501,6 +501,7 @@ export default function CabinListScreen({
         open={!!recordTail}
         tail={recordTail}
         station={station}
+        outsideTempF={outsideTempF}
         onClose={() => setRecordTail(null)}
         onSaved={load}
       />
