@@ -116,7 +116,7 @@ export default function NightAircraftScreen({ station = "OMA", activeTab = "nigh
             <div className="min-w-0">
               <div className="text-lg font-extrabold leading-tight">Night Setup</div>
               <div className="mt-1 text-sm text-ramp-muted">
-                {station} • Ops Date: {opsDate}
+                {station} • Date: {opsDate}
               </div>
             </div>
 
@@ -133,18 +133,7 @@ export default function NightAircraftScreen({ station = "OMA", activeTab = "nigh
       </div>
 
       <div className="mx-auto max-w-md px-4 pb-28 pt-4">
-        <Panel
-          title="Tonight’s Aircraft"
-          subtitle="Add/remove tails used by Cabin Temp + night checks"
-          right={
-            <button
-              onClick={load}
-              className="rounded-xl bg-white/6 px-3 py-2 text-xs font-semibold ring-1 ring-white/12 hover:bg-white/8 active:scale-[0.99] transition"
-            >
-              Refresh
-            </button>
-          }
-        >
+        <Panel title="Tonight’s Aircraft" subtitle="Add/remove tails for tonight’s worklist">
           <div className="space-y-3">
             <div className="rounded-2xl bg-ramp-panel2 p-4 ring-1 ring-white/10">
               <label className="block text-xs font-semibold text-ramp-muted">Add Tail</label>
@@ -167,9 +156,6 @@ export default function NightAircraftScreen({ station = "OMA", activeTab = "nigh
                 >
                   Add
                 </button>
-              </div>
-              <div className="mt-2 text-[11px] text-ramp-muted">
-                Tip: keep it simple (N123PD). We can add dropdown/lookup later.
               </div>
             </div>
 

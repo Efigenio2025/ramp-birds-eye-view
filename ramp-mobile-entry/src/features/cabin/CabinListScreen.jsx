@@ -5,6 +5,7 @@ import Panel from "../../components/ui/Panel"
 import StatusPill from "../../components/ui/StatusPill"
 import CabinHistoryModal from "./CabinHistoryModal"
 import RecordTempModal from "./RecordTempModal"
+import { localOpsDateISO } from "../../utils/date"
 
 const DUE_SOON_MINUTES = 10
 
@@ -46,8 +47,8 @@ function BottomNav({ active, onNav }) {
   const items = [
     { key: "dashboard", label: "Dashboard" },
     { key: "cabin", label: "Cabin Temp" },
+    { key: "night", label: "Night Setup" },
     { key: "deice", label: "Deice" },
-    { key: "gse", label: "GSE" },
     { key: "notes", label: "Notes" },
   ]
 
@@ -83,56 +84,100 @@ export default function CabinListScreen({
   outsideTempF,
   setOutsideTempF,
 }) {
+  const opsDate = useMemo(() => localOpsDateISO(), [])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [tails, setTails] = useState([])
   const [checks, setChecks] = useState([])
+  const [source, setSource] = useState("")
 
   const [selectedTail, setSelectedTail] = useState(null)
   const [recordTail, setRecordTail] = useState(null)
 
   const freq = frequencyMinutes(outsideTempF)
 
-  const load = async () => {
-    setError("")
-    setLoading(true)
+  const loadTailsForTonight = async () => {
+    // Primary source: nightly_aircraft for today's ops date
+    const { data, error: err } = await supabase
+      .from("nightly_aircraft")
+      .select("tail")
+      .eq("station", station)
+      .eq("ops_date", opsDate)
+      .order("tail", { ascending: true })
 
-    const { data: aircraftRows, error: aircraftErr } = await supabase
+    if (err) return { tails: null, err }
+
+    const list = (data ?? []).map((r) => r.tail)
+    return { tails: list, err: null }
+  }
+
+  const loadTailsFallback = async () => {
+    // Fallback source: aircraft table (active list)
+    const { data, error: err } = await supabase
       .from("aircraft")
       .select("tail")
       .eq("active", true)
       .order("tail", { ascending: true })
 
-    if (aircraftErr) {
-      setError(`Aircraft load failed: ${aircraftErr.message}`)
-      setLoading(false)
-      return
-    }
+    if (err) return { tails: null, err }
 
-    const tailList = (aircraftRows ?? []).map((r) => r.tail)
-    setTails(tailList)
+    const list = (data ?? []).map((r) => r.tail)
+    return { tails: list, err: null }
+  }
 
-    if (tailList.length === 0) {
-      setChecks([])
-      setLoading(false)
-      return
-    }
+  const loadChecks = async (tailList) => {
+    if (!tailList?.length) return []
 
-    const { data: checkRows, error: checkErr } = await supabase
+    const { data, error: err } = await supabase
       .from("cabin_temp_checks")
       .select("id, tail, temp_f, checked_by, checked_at, notes")
       .in("tail", tailList)
       .order("checked_at", { ascending: false })
       .limit(500)
 
-    if (checkErr) {
-      setError(`Cabin checks load failed: ${checkErr.message}`)
-      setChecks([])
+    if (err) throw err
+    return data ?? []
+  }
+
+  const load = async () => {
+    setError("")
+    setLoading(true)
+
+    // 1) Try nightly_aircraft
+    const primary = await loadTailsForTonight()
+    if (primary.err) {
+      setError(`Nightly aircraft load failed: ${primary.err.message}`)
       setLoading(false)
       return
     }
 
-    setChecks(checkRows ?? [])
+    let tailList = primary.tails ?? []
+    if (tailList.length > 0) {
+      setSource(`Tonight’s list (${opsDate})`)
+    } else {
+      // 2) Fallback to aircraft table
+      const fallback = await loadTailsFallback()
+      if (fallback.err) {
+        setError(`Aircraft fallback load failed: ${fallback.err.message}`)
+        setLoading(false)
+        return
+      }
+      tailList = fallback.tails ?? []
+      setSource("Fallback: aircraft table")
+    }
+
+    setTails(tailList)
+
+    try {
+      const rows = await loadChecks(tailList)
+      setChecks(rows)
+    } catch (e) {
+      setChecks([])
+      setError(`Cabin checks load failed: ${e.message}`)
+      setLoading(false)
+      return
+    }
+
     setLoading(false)
   }
 
@@ -145,7 +190,6 @@ export default function CabinListScreen({
 
   const rows = useMemo(() => {
     const latestByTail = new Map()
-
     for (const r of checks) {
       if (!latestByTail.has(r.tail)) latestByTail.set(r.tail, r)
     }
@@ -158,14 +202,7 @@ export default function CabinListScreen({
       const status = latest ? statusFromRemaining(minsRemaining) : "NO DATA"
       const tone = toneFromStatus(status)
 
-      return {
-        tail,
-        latest,
-        minsSince,
-        minsRemaining,
-        status,
-        tone,
-      }
+      return { tail, latest, minsSince, minsRemaining, status, tone }
     })
 
     const rank = (tone) => (tone === "danger" ? 0 : tone === "warn" ? 1 : tone === "good" ? 2 : 3)
@@ -196,6 +233,9 @@ export default function CabinListScreen({
               <div className="text-lg font-extrabold leading-tight">Cabin Temp</div>
               <div className="mt-1 text-sm text-ramp-muted">
                 {station} • checks every {freq} min • {tails.length} aircraft
+              </div>
+              <div className="mt-1 text-[11px] text-ramp-muted">
+                Source: <span className="text-ramp-text">{source || "—"}</span>
               </div>
             </div>
 
@@ -263,7 +303,7 @@ export default function CabinListScreen({
           <div className="space-y-3">
             {rows.length === 0 ? (
               <div className="rounded-2xl bg-ramp-panel2 p-4 text-sm text-ramp-muted ring-1 ring-white/10">
-                No aircraft found.
+                No aircraft found. Add tails in <span className="text-ramp-text font-semibold">Night Setup</span>.
               </div>
             ) : (
               rows.map((r) => {
