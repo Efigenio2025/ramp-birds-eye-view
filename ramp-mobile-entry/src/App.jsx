@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import AuthGate from "./features/auth/AuthGate"
 import MobileDashboard from "./features/dashboard/MobileDashboard"
 import CabinListScreen from "./features/cabin/CabinListScreen"
 
@@ -61,5 +62,5 @@ export default function App() {
     )
   }, [activeTab, outsideTempF, station])
 
-  return screen
+  return <AuthGate>{screen}</AuthGate>
 }
